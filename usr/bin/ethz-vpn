@@ -1,0 +1,264 @@
+#!/usr/bin/python3
+
+import json
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+import gi
+import keyring
+
+gi.require_version("AppIndicator3", "0.1")
+gi.require_version("Gtk", "3.0")
+gi.require_version("Notify", "0.7")
+from gi.repository import AppIndicator3, GLib, Gtk, Notify
+
+VERSION = "1.0.0"
+APPINDICATOR_ID = "ethz_vpn_indicator"
+DATADIR = Path.home() / ".local/ethz-vpn"
+SECRETS_FILE = DATADIR / "secrets.json"
+
+VPN_PROCESS = None
+
+
+def send_notification(title, message, icon="network-vpn-symbolic"):
+    """Sends a DBus notification to the desktop."""
+    Notify.init(APPINDICATOR_ID)
+    n = Notify.Notification.new(title, message, icon)
+    n.show()
+
+
+class SetupDialog(Gtk.Dialog):
+    def __init__(self, parent):
+        super().__init__(title="ETHZ VPN Setup", transient_for=parent, flags=0)
+        self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OK, Gtk.ResponseType.OK)
+        self.set_default_size(300, 200)
+
+        box = self.get_content_area()
+        grid = Gtk.Grid(column_spacing=10, row_spacing=10, margin=15)
+
+        # Labels and Entries
+        self.user_entry = Gtk.Entry(placeholder_text="e.g. jdoe")
+        self.group_entry = Gtk.Entry(text="student-net")
+        self.pass_entry = Gtk.Entry(visibility=False, placeholder_text="ETH password")
+        self.otp_entry = Gtk.Entry(placeholder_text="Base32 OTP Secret")
+
+        grid.attach(Gtk.Label(label="ETH Username:"), 0, 0, 1, 1)
+        grid.attach(self.user_entry, 1, 0, 1, 1)
+        grid.attach(Gtk.Label(label="VPN Group:"), 0, 1, 1, 1)
+        grid.attach(self.group_entry, 1, 1, 1, 1)
+        grid.attach(Gtk.Label(label="Password:"), 0, 2, 1, 1)
+        grid.attach(self.pass_entry, 1, 2, 1, 1)
+        grid.attach(Gtk.Label(label="OTP Secret:"), 0, 3, 1, 1)
+        grid.attach(self.otp_entry, 1, 3, 1, 1)
+
+        box.add(grid)
+        self.show_all()
+
+    def get_data(self):
+        return {
+            "username": self.user_entry.get_text().strip(),
+            "group": self.group_entry.get_text().strip(),
+            "password": self.pass_entry.get_text(),
+            "token": self.otp_entry.get_text().strip(),
+        }
+
+
+def load_secrets():
+    if not SECRETS_FILE.exists():
+        return None
+    try:
+        with open(SECRETS_FILE, "r") as f:
+            config = json.load(f)
+
+        user = config["username"]
+        group = config["group"]
+        password = keyring.get_password("ethz-vpn", f"{user}-pass")
+        token = keyring.get_password("ethz-vpn", f"{user}-token")
+
+        if not password or not token:
+            return None
+
+        return {"username": user, "group": group, "password": password, "token": token}
+    except Exception:
+        return None
+
+
+def connect_vpn():
+    global VPN_PROCESS
+    secrets = load_secrets()
+    if not secrets:
+        send_notification("VPN Error", "Credentials not found. Please run setup.")
+        return
+
+    cmd = [
+        "sudo",
+        "openconnect",
+        "-u",
+        f"{secrets['username']}@{secrets['group']}.ethz.ch",
+        "-g",
+        f"{secrets['group']}",
+        "--useragent=AnyConnect",
+        "--passwd-on-stdin",
+        "--token-mode=totp",
+        f"--token-secret=sha1:base32:{secrets['token']}",
+        "sslvpn.ethz.ch",
+        "--no-external-auth",
+    ]
+
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.stdin.write(secrets["password"].encode() + b"\n")
+        proc.stdin.flush()
+        VPN_PROCESS = proc
+    except Exception as e:
+        send_notification("VPN Connection Failed", str(e))
+
+
+def is_vpn_connected():
+    try:
+        process_check = subprocess.run(["pgrep", "openconnect"], stdout=subprocess.PIPE)
+        if process_check.returncode != 0:
+            return False
+        interface_check = subprocess.check_output(["ip", "addr", "show"], stderr=subprocess.STDOUT).decode()
+        return any(x in interface_check for x in ["tun", "vpn"])
+    except Exception:
+        return False
+
+
+class VPNIndicator:
+    def __init__(self):
+        self.indicator = AppIndicator3.Indicator.new(
+            APPINDICATOR_ID, "network-vpn-disconnected-symbolic", AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
+        )
+        self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+        self.last_state = False
+        self.build_menu()
+        GLib.timeout_add_seconds(3, self.update_ui)
+
+    def _create_menu_item(self, label_text, icon_name, callback):
+        """Creates a MenuItem that forces the icon to show using the Gtk.AccelLabel's image property."""
+        image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+        item = Gtk.ImageMenuItem(label=label_text)
+        item.set_image(image)
+        item.set_always_show_image(True)
+
+        if callback:
+            item.connect("activate", callback)
+
+        item.show_all()
+        return item
+
+    def build_menu(self):
+        self.menu = Gtk.Menu()
+        secrets = load_secrets()
+
+        if not secrets:
+            item_setup = self._create_menu_item("Run Setup...", "preferences-system-symbolic", self.on_run_setup)
+            self.menu.append(item_setup)
+        else:
+            self.item_connect = self._create_menu_item("Connect VPN", "network-vpn-symbolic", lambda _: connect_vpn())
+            self.menu.append(self.item_connect)
+
+            self.item_disconnect = self._create_menu_item("Disconnect VPN", "process-stop-symbolic", self.on_disconnect)
+            self.menu.append(self.item_disconnect)
+
+            self.menu.append(Gtk.SeparatorMenuItem())
+            item_clear = self._create_menu_item("Clear Credentials", "edit-clear-symbolic", self.on_clear_credentials)
+            self.menu.append(item_clear)
+
+        self.menu.append(Gtk.SeparatorMenuItem())
+
+        self.menu.show_all()
+        self.indicator.set_menu(self.menu)
+
+    def on_clear_credentials(self, _):
+        """Wipes all saved data from the system."""
+        dialog = Gtk.MessageDialog(
+            transient_for=None,
+            flags=0,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text="Are you sure you want to clear your credentials?",
+        )
+        dialog.format_secondary_text("This will delete your ETH password and OTP token from the system keyring.")
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            try:
+                if SECRETS_FILE.exists():
+                    with open(SECRETS_FILE, "r") as f:
+                        config = json.load(f)
+                    user = config["username"]
+
+                    keyring.delete_password("ethz-vpn", f"{user}-pass")
+                    keyring.delete_password("ethz-vpn", f"{user}-token")
+
+                    os.remove(SECRETS_FILE)
+
+                send_notification("Credentials Cleared", "All saved data has been removed.")
+                self.build_menu()
+            except Exception as e:
+                send_notification("Error", f"Could not fully clear data: {e}")
+
+        dialog.destroy()
+
+    def on_run_setup(self, _):
+        dialog = SetupDialog(None)
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            data = dialog.get_data()
+            if all(data.values()):
+                os.makedirs(DATADIR, exist_ok=True)
+                with open(SECRETS_FILE, "w") as f:
+                    json.dump({"username": data["username"], "group": data["group"]}, f)
+                # Save sensitive bits to Keyring
+                keyring.set_password("ethz-vpn", f"{data['username']}-pass", data["password"])
+                keyring.set_password("ethz-vpn", f"{data['username']}-token", data["token"])
+                self.build_menu()
+        dialog.destroy()
+
+    def on_disconnect(self, _):
+        subprocess.run(["sudo", "/usr/bin/pkill", "-SIGINT", "openconnect"])
+        self.update_ui()
+
+    def update_ui(self):
+        connected = is_vpn_connected()
+        # Notify on state change
+        if connected != self.last_state:
+            if connected:
+                send_notification("VPN Connected", f"Secure tunnel established.")
+            else:
+                send_notification("VPN Disconnected", "The secure tunnel has been closed.")
+            self.last_state = connected
+
+        self.indicator.set_icon_full(
+            "network-vpn-symbolic" if connected else "network-vpn-disconnected-symbolic", "VPN Status Indicator"
+        )
+        if hasattr(self, "item_connect"):
+            self.item_connect.set_sensitive(not connected)
+            self.item_disconnect.set_sensitive(connected)
+        return True
+
+
+def main():
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].lower()
+        if arg in ["--version", "-v"]:
+            print(f"ETHZ VPN Indicator v{VERSION}")
+            sys.exit(0)
+        elif arg in ["setup", "init"]:
+            pass
+
+    Notify.init(APPINDICATOR_ID)
+    indicator = VPNIndicator()
+    signal.signal(signal.SIGINT, lambda sig, frame: Gtk.main_quit())
+    signal.signal(signal.SIGTERM, lambda sig, frame: Gtk.main_quit())
+
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

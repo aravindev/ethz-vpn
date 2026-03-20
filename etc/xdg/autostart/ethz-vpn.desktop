@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ETHZ VPN
+Comment=Tray icon for ETHZ VPN
+Exec=/usr/bin/ethz-vpn
+Icon=network-vpn-symbolic
+Terminal=false
+Categories=Network;

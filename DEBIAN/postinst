@@ -1,0 +1,18 @@
+#!/bin/bash
+chmod +x /usr/bin/ethz-vpn
+mkdir -p /etc/sudoers.d/
+SUDOERS_FILE="/etc/sudoers.d/ethz-vpn"
+echo '%sudo ALL=(ALL) NOPASSWD: /usr/sbin/openconnect, /usr/bin/pkill -SIGINT openconnect' > "$SUDOERS_FILE"
+chmod 0440 "$SUDOERS_FILE"
+
+# Update the desktop database so the icon shows up in the menu immediately
+if [ -x /usr/bin/update-desktop-database ]; then
+    update-desktop-database -q /usr/share/applications
+fi
+
+# Update icon cache if you included a custom icon
+if [ -x /usr/bin/gtk-update-icon-cache ]; then
+    gtk-update-icon-cache -f -t /usr/share/icons/hicolor
+fi
+
+echo "🚀 Installation complete! You can now find 'ETHZ VPN' in your Applications menu or re-login for the app to autostart."

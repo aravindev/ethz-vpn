@@ -1,0 +1,34 @@
+#!/bin/bash
+
+set -e
+
+case "$1" in
+    remove)
+      # 1. Remove the custom sudoers rule
+      if [ -f "/etc/sudoers.d/ethz-vpn" ]; then
+          rm -f "/etc/sudoers.d/ethz-vpn"
+          echo "🗑️  Removed sudoers security policy."
+      fi
+      echo "🔌 ETHZ VPN uninstallation complete."
+      ;;
+    purge)
+      echo "Cleaning up user secrets and config folders..."
+      # This finds all home directories and removes the app's hidden folder
+      for user_dir in /home/*; do
+          if [ -d "$user_dir/.local/ethz-vpn" ]; then
+              rm -rf "$user_dir/.local/ethz-vpn"
+          fi
+      done
+      rm -f /etc/xdg/autostart/ethz-vpn.desktop
+      rm -f /usr/share/applications/ethz-vpn.desktop
+      echo "✨ All user data wiped."
+      ;;
+
+    *)
+      echo "Usage: $0 {remove|purge}"
+      exit 1
+      ;;
+esac
+exit 0
+
+

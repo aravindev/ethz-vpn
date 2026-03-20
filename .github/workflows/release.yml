@@ -1,0 +1,38 @@
+name: Build and Release Debian
+
+on:
+  push:
+    tags:
+      - "v*" # Trigger on version tags like v1.0, v1.1, etc.
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get tag version
+        id: get_ver
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build Package
+        run: |
+          chmod +x build.sh
+          ./build.sh ${{ steps.get_ver.outputs.VERSION }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ethz-vpn_${{ steps.get_ver.outputs.VERSION }}_all.deb
+          body: |
+            ## ETHZ VPN Indicator v${{ steps.get_ver.outputs.VERSION }}
+
+            Changes in this release:
+            - Automated build from tag v${{ steps.get_ver.outputs.VERSION }}
+            - Secure Keyring storage enabled
+            - System-wide sudoers policy included
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
