@@ -32,7 +32,6 @@ jobs:
 
             Changes in this release:
             - Automated build from tag v${{ steps.get_ver.outputs.VERSION }}
-            - Secure Keyring storage enabled
-            - System-wide sudoers policy included
+            - Remove debian image from repository
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
