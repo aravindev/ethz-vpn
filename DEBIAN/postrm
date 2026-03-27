@@ -24,6 +24,9 @@ case "$1" in
       echo "✨ All user data wiped."
       ;;
 
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+      ;;
+
     *)
       echo "Usage: $0 {remove|purge}"
       exit 1

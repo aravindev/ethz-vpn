@@ -15,7 +15,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Notify", "0.7")
 from gi.repository import AppIndicator3, GLib, Gtk, Notify
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 APPINDICATOR_ID = "ethz_vpn_indicator"
 DATADIR = Path.home() / ".local/ethz-vpn"
 SECRETS_FILE = DATADIR / "secrets.json"

@@ -32,6 +32,6 @@ jobs:
 
             Changes in this release:
             - Automated build from tag v${{ steps.get_ver.outputs.VERSION }}
-            - Remove debian image from repository
+            - Fix issue with debian removal
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
